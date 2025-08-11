@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ASIN销量排名相关性分析 - 带筛选功能</title>
+    <!-- 引入必要的库 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mathjs@12.4.2/lib/browser/math.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+    <!-- XLSX解析库 -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#3B82F6',
+                        secondary: '#10B981',
+                        positive: '#EF4444',    // 红色系表示正相关
+                        negative: '#3B82F6',    // 蓝色系表示负相关
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'system-ui', 'sans-serif'],
+                    },
+                }
+            }
+        }
+    </script>
+    
+    <style type="text/tailwindcss">
+        @layer utilities {
+            .content-auto {
+                content-visibility: auto;
+            }
+            .correlation-cell {
+                @apply p-2 text-center transition-all duration-200;
+            }
+            .correlation-high-positive {
+                @apply bg-positive text-white;
+            }
+            .correlation-positive {
+                @apply bg-red-200;
+            }
+            .correlation-neutral {
+                @apply bg-gray-100;
+            }
+            .correlation-negative {
+                @apply bg-blue-200;
+            }
+            .correlation-high-negative {
+                @apply bg-negative text-white;
+            }
+            .correlation-hidden {
+                @apply bg-gray-50 text-gray-300;
+            }
+            .upload-area {
+                @apply border-2 border-dashed border-gray-300 rounded-lg p-8 text-center cursor-pointer transition-all hover:border-primary hover:bg-blue-50;
+            }
+            .section-card {
+                @apply bg-white rounded-lg shadow-md p-6 mb-8;
+            }
+            .status-message {
+                @apply p-4 rounded-lg mb-4 hidden;
+            }
+            .status-success {
+                @apply bg-green-50 text-green-700 border border-green-200;
+            }
+            .status-error {
+                @apply bg-red-50 text-red-700 border border-red-200;
+            }
+            .slider-container {
+                @apply w-full mt-6;
+            }
+            .slider {
+                @apply w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-primary;
+            }
+        }
+    </style>
+</head>
+<body class="bg-gray-50 font-sans">
+    <div class="container mx-auto px-4 py-8 max-w-7xl">
+        <header class="mb-8">
+            <h1 class="text-[clamp(1.8rem,4vw,2.5rem)] font-bold text-gray-800 mb-2">ASIN销量排名相关性分析</h1>
+            <p class="text-gray-600">一般来说，负相关，代表存在直接流量竞争，不妨多关注</p>
+            <p class="text-gray-600">排名数据，可以从helium10，卖家精灵下载</p>
+        </header>
+        
+        <!-- 状态消息区域 -->
+        <div id="success-message" class="status-message status-success">
+            <i class="fa fa-check-circle mr-2"></i>
+            <span id="success-text">数据处理成功</span>
+        </div>
+        <div id="error-message" class="status-message status-error">
+            <i class="fa fa-exclamation-circle mr-2"></i>
+            <span id="error-text">数据处理出错</span>
+        </div>
+        
+        <!-- 文件上传区域 -->
+        <div class="section-card">
+            <h2 class="text-xl font-semibold mb-4 flex items-center">
+                <i class="fa fa-upload text-primary mr-2"></i>上传销售数据
+            </h2>
+            <div id="upload-container" class="upload-area">
+                <input type="file" id="file-upload" accept=".xlsx,.xls" class="hidden" />
+                <label for="file-upload" class="cursor-pointer">
+                    <i class="fa fa-file-text-o text-5xl text-gray-400 mb-3"></i>
+                    <p class="text-gray-600 mb-1">点击或拖拽文件到此处上传</p>
+                    <p class="text-sm text-gray-400">支持格式：XLSX, XLS</p>
+                    <p class="text-sm text-gray-400">文件格式：日期时间,ASIN,销量排名（支持同一天多个时段）</p>
+                </label>
+                <div id="upload-progress" class="hidden mt-4">
+                    <div class="w-full bg-gray-200 rounded-full h-2.5">
+                        <div id="progress-bar" class="bg-primary h-2.5 rounded-full" style="width: 0%"></div>
+                    </div>
+                    <p id="progress-text" class="text-sm text-gray-500 mt-2">处理中...</p>
+                </div>
+            </div>
+            <div id="data-info" class="mt-4 hidden">
+                <p class="text-sm text-green-600"><i class="fa fa-check-circle mr-1"></i> 数据加载完成：<span id="data-stats"></span></p>
+            </div>
+        </div>
+        
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+            <div class="section-card">
+                <h2 class="text-xl font-semibold mb-4 flex items-center">
+                    <i class="fa fa-line-chart text-primary mr-2"></i>整体统计
+                </h2>
+                <div class="space-y-4">
+                    <div>
+                        <p class="text-gray-500 text-sm">平均相关系数</p>
+                        <p id="avg-correlation" class="text-2xl font-bold text-primary">--</p>
+                    </div>
+                    <div>
+                        <p class="text-gray-500 text-sm">正相关对占比</p>
+                        <p id="positive-ratio" class="text-2xl font-bold text-positive">--</p>
+                    </div>
+                    <div>
+                        <p class="text-gray-500 text-sm">强正相关对占比</p>
+                        <p id="strong-positive-ratio" class="text-2xl font-bold text-positive">--</p>
+                    </div>
+                    <div>
+                        <p class="text-gray-500 text-sm">强负相关对占比</p>
+                        <p id="strong-negative-ratio" class="text-2xl font-bold text-negative">--</p>
+                    </div>
+                    
+                    <!-- 相关系数筛选滑块 -->
+                    <div class="slider-container pt-4 border-t border-gray-100">
+                        <label for="correlation-threshold" class="block text-sm font-medium text-gray-700 mb-2">
+                            相关系数筛选阈值: <span id="threshold-value" class="font-bold text-primary">0.7</span>
+                        </label>
+                        <input 
+                            type="range" 
+                            id="correlation-threshold" 
+                            class="slider"
+                            min="0" 
+                            max="1" 
+                            step="0.05" 
+                            value="0.7"
+                            disabled
+                        >
+                        <div class="flex justify-between text-xs text-gray-500 mt-1">
+                            <span>弱相关</span>
+                            <span>强相关</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 正相关性区域 -->
+            <div class="section-card lg:col-span-2">
+                <h2 class="text-xl font-semibold mb-4 flex items-center text-positive">
+                    <i class="fa fa-arrow-up mr-2"></i>正相关性ASIN对（r ≥ <span id="positive-threshold-display">0.7</span>）
+                </h2>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full">
+                        <thead>
+                            <tr class="bg-red-50">
+                                <th class="py-2 px-4 text-left">ASIN 1</th>
+                                <th class="py-2 px-4 text-left">ASIN 2</th>
+                                <th class="py-2 px-4 text-left">相关系数</th>
+                                <th class="py-2 px-4 text-left">相关强度</th>
+                            </tr>
+                        </thead>
+                        <tbody id="positive-pairs">
+                            <tr>
+                                <td colspan="4" class="py-4 text-center text-gray-500">请上传数据进行分析</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 负相关性区域 -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+            <div class="lg:col-span-3">
+                <div class="section-card">
+                    <h2 class="text-xl font-semibold mb-4 flex items-center text-negative">
+                        <i class="fa fa-arrow-down mr-2"></i>负相关性ASIN对（r ≤ <span id="negative-threshold-display">-0.7</span>）
+                    </h2>
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full">
+                            <thead>
+                                <tr class="bg-blue-50">
+                                    <th class="py-2 px-4 text-left">ASIN 1</th>
+                                    <th class="py-2 px-4 text-left">ASIN 2</th>
+                                    <th class="py-2 px-4 text-left">相关系数</th>
+                                    <th class="py-2 px-4 text-left">相关强度</th>
+                                </tr>
+                            </thead>
+                            <tbody id="negative-pairs">
+                                <tr>
+                                    <td colspan="4" class="py-4 text-center text-gray-500">请上传数据进行分析</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="section-card">
+            <h2 class="text-xl font-semibold mb-4 flex items-center">
+                <i class="fa fa-heatmap text-primary mr-2"></i>相关性矩阵热力图
+                <span class="ml-2 text-sm text-gray-500">(仅显示|r| ≥ <span id="heatmap-threshold-display">0.7</span>的显著相关)</span>
+            </h2>
+            <div class="overflow-x-auto overflow-y-auto max-h-[600px]">
+                <div id="correlation-heatmap" class="min-w-full">
+                    <div class="flex items-center justify-center h-64 text-gray-500">
+                        上传数据后显示相关性热力图
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="section-card">
+            <h2 class="text-xl font-semibold mb-4 flex items-center">
+                <i class="fa fa-area-chart text-primary mr-2"></i>ASIN销量排名趋势
+            </h2>
+            <div class="h-[400px]">
+                <canvas id="trends-chart"></canvas>
+            </div>
+        </div>
+    </div>
+    <script src="relative.js"></script>
+</body>
+</html>
+    
